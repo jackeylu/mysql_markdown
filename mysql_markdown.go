@@ -11,12 +11,13 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
-	"github.com/schollz/progressbar/v3"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/schollz/progressbar/v3"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -26,24 +27,27 @@ const (
 	LANG_EN = "en"
 )
 
-/**
+/*
+*
 Database Configuration
 */
 var (
-	host     = flag.String("h", "127.0.0.1", "host(127.0.0.1)")
-	username = flag.String("u", "root", "username(root)")
-	password = flag.String("p", "root", "password(root)")
-	database = flag.String("d", "mysql", "database(mysql)")
-	port     = flag.Int("P", 3306, "port(3306)")
-	charset  = flag.String("c", "utf8", "charset(utf8)")
-	output   = flag.String("o", "", "output location")
-	tables   = flag.String("t", "", "choose tables")
-	version  = flag.Bool("v", false, "show version and exit")
-	detail   = flag.Bool("V", false, "show version and exit")
-	language = flag.String("l", LANG_CN, "output language,support:cn,en")
+	host        = flag.String("h", "127.0.0.1", "host(127.0.0.1)")
+	username    = flag.String("u", "root", "username(root)")
+	password    = flag.String("p", "root", "password(root)")
+	database    = flag.String("d", "mysql", "database(mysql)")
+	port        = flag.Int("P", 3306, "port(3306)")
+	charset     = flag.String("c", "utf8", "charset(utf8)")
+	output      = flag.String("o", "", "output location")
+	tables      = flag.String("t", "", "choose tables")
+	excludeCols = flag.String("e", "", "exclued columns for each table")
+	version     = flag.Bool("v", false, "show version and exit")
+	detail      = flag.Bool("V", false, "show version and exit")
+	language    = flag.String("l", LANG_CN, "output language,support:cn,en")
 )
 
-/**
+/*
+*
 Structured Query Language
 */
 const (
@@ -58,7 +62,8 @@ var headers = map[string]string{
 	LANG_EN: "| SN | Name | Description | Type | Key | Is Null | Extra | Default value |",
 }
 
-/**
+/*
+*
 struct for table column
 */
 type tableColumn struct {
@@ -72,7 +77,8 @@ type tableColumn struct {
 	ColumnDefault   sql.NullString `db:"COLUMN_DEFAULT"`   // default value
 }
 
-/**
+/*
+*
 struct for table message
 */
 type tableInfo struct {
@@ -80,7 +86,8 @@ type tableInfo struct {
 	Comment sql.NullString `db:"table_comment"` // comment
 }
 
-/**
+/*
+*
 connect mysql service
 */
 func connect() (*sql.DB, error) {
@@ -95,7 +102,8 @@ func connect() (*sql.DB, error) {
 	return db, err
 }
 
-/**
+/*
+*
 query table info about scheme
 */
 func queryTables(db *sql.DB, dbName string) ([]tableInfo, error) {
@@ -148,10 +156,11 @@ func queryTables(db *sql.DB, dbName string) ([]tableInfo, error) {
 	return tableCollect, err
 }
 
-/**
+/*
+*
 query table column message
 */
-func queryTableColumn(db *sql.DB, dbName string, tableName string) ([]tableColumn, error) {
+func queryTableColumn(db *sql.DB, dbName string, tableName string, removedCols []string) ([]tableColumn, error) {
 	// 定义承载列信息的切片
 	var columns []tableColumn
 
@@ -175,13 +184,25 @@ func queryTableColumn(db *sql.DB, dbName string, tableName string) ([]tableColum
 			fmt.Printf("query table column scan error, detail is [%v]\n", err.Error())
 			return columns, err
 		}
+		// filter columns when specified excludeCols params
+		var ignored = false
+		for _, item := range removedCols {
+			if strings.EqualFold(item, column.ColumnName) {
+				ignored = true
+				break
+			}
+		}
+		if ignored {
+			continue
+		}
 		columns = append(columns, column)
 	}
 
 	return columns, err
 }
 
-/**
+/*
+*
 get choose table index by regexp. then you can batch choose table like `time_zone\w`
 */
 func getTargetIndexMap(tableNameArr []string, item string) map[int]int {
@@ -197,7 +218,8 @@ func getTargetIndexMap(tableNameArr []string, item string) map[int]int {
 	return indexMap
 }
 
-/**
+/*
+*
 init func
 */
 func init() {
@@ -213,6 +235,7 @@ func init() {
 			"-c      charset.  default utf8" + "\n" +
 			"-o      output.   default current location\n" +
 			"-t      tables.   default all table and support ',' separator for filter, every item can use regexp\n" +
+			"-e      excluded columns.   default no excludes and support ',' separator for filter\n" +
 			"-l      language. default cn,support: cn,en" +
 			"")
 		os.Exit(0)
@@ -224,10 +247,10 @@ func init() {
 	}
 	if *detail {
 		fmt.Println(
-			"mysql_markdown version: 1.0.5\n" +
-				"build by golang 2020.07.04\n" +
-				"author		AlicFeng\n" +
-				"tutorial	https://github.com/alicfeng/mysql_markdown\n" +
+			"mysql_markdown version: 1.0.6\n" +
+				"build by golang 2023.01.21\n" +
+				"author		AlicFeng, Jackeylyu\n" +
+				"tutorial	https://github.com/jackeylyu/mysql_markdown\n" +
 				"价值源于技术,技术源于分享" +
 				"")
 		os.Exit(0)
@@ -241,10 +264,11 @@ func init() {
 	} else {
 		*language = LANG_CN
 	}
-	fmt.Printf("langguage:%s", *language)
+	fmt.Printf("langguage:%s\n", *language)
 }
 
-/**
+/*
+*
 main func
 */
 func main() {
@@ -283,6 +307,12 @@ func main() {
 	bar := progressbar.Default(int64(len(tables)))
 	var header = headers[*language]
 
+	var removedCols []string
+	if *excludeCols != "" {
+		removedCols = strings.Split(*excludeCols, ",")
+	} else {
+		removedCols = make([]string, 0)
+	}
 	for index, table := range tables {
 		// make content process log
 		//fmt.Printf("%d/%d the %s table is making ...\n", index+1, len(tables), table.Name)
@@ -297,7 +327,7 @@ func main() {
 		tableContent += "\n" +
 			header + "\n" +
 			"| :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: |\n"
-		var columnInfo, columnInfoErr = queryTableColumn(db, *database, table.Name)
+		var columnInfo, columnInfoErr = queryTableColumn(db, *database, table.Name, removedCols)
 		if columnInfoErr != nil {
 			continue
 		}
